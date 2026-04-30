@@ -1,0 +1,70 @@
+# fm-dev-platform — values.
+# Populated per-environment by the operator from the Environment CR.
+
+# Environment-level metadata. Stamped onto every resource.
+env:
+  name: ""              # e.g. feature-xyz
+  owner: ""             # e.g. andrew@fastmarkets.com
+  expiresAt: ""         # RFC3339, e.g. 2026-04-30T22:00:00Z
+
+# One Deployment per map entry. Each is pinned to replicas: 1 by the chart.
+# Key becomes the Deployment name (namespace-scoped, no env-name prefix).
+deployments: {}
+  # api:
+  #   image: registry.fastmarkets.io/myapp-api:abc123
+  #   imagePullPolicy: IfNotPresent     # optional, default IfNotPresent
+  #   port: 8080                        # optional; emits a single named "http" containerPort
+  #
+  #   resources:
+  #     requests: { cpu: 100m, memory: 256Mi }
+  #     limits:   { cpu: 500m, memory: 512Mi }
+  #
+  #   # Workload Identity. When true:
+  #   #   - serviceAccountName is set to the deployment name
+  #   #   - automountServiceAccountToken: true (required for the projected token)
+  #   #   - pod gets azure.workload.identity/use: "true" label
+  #   # When false (default), automount is forced off.
+  #   usesServiceAccount: false
+  #
+  #   # Probes are off by default. Specify any subset.
+  #   probes:
+  #     liveness:
+  #       httpGet: { path: /healthz, port: 8080 }
+  #     readiness:
+  #       httpGet: { path: /ready, port: 8080 }
+  #     startup:
+  #       httpGet: { path: /healthz, port: 8080 }
+  #       failureThreshold: 30
+  #       periodSeconds: 10
+  #
+  #   # Container env. Plain values plus secret/configmap refs.
+  #   env:
+  #     - name: LOG_LEVEL
+  #       value: debug
+  #     - name: DB_PASSWORD
+  #       valueFrom:
+  #         secretKeyRef:
+  #           name: db-creds          # references a Secret in this namespace
+  #           key: password
+  #     - name: FEATURE_X
+  #       valueFrom:
+  #         configMapKeyRef:
+  #           name: app-config
+  #           key: feature-x
+  #
+  #   envFrom:
+  #     - configMapRef: { name: app-config }
+  #     - secretRef:    { name: db-creds }
+  #
+  #   # Volumes default to none. Use for configmap/secret/projected mounts.
+  #   volumes:
+  #     - name: config
+  #       configMap: { name: app-config }
+  #   volumeMounts:
+  #     - name: config
+  #       mountPath: /etc/config
+  #       readOnly: true
+  #
+  #   # Extra labels merged onto the Deployment + pod template (after platform labels).
+  #   labels: {}
+  #   podLabels: {}

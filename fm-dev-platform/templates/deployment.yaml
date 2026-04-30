@@ -1,0 +1,86 @@
+{{- range $name, $cfg := .Values.deployments }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" $name) | nindent 4 }}
+    {{- with $cfg.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fm-dev-platform.selectorLabels" (dict "root" $ "deploymentName" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" $name) | nindent 8 }}
+        {{- if $cfg.usesServiceAccount }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- with $cfg.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 8 }}
+    spec:
+      {{- if $cfg.usesServiceAccount }}
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      {{- else }}
+      automountServiceAccountToken: false
+      {{- end }}
+      securityContext:
+        {{- include "fm-dev-platform.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ required (printf "deployments.%s.image is required" $name) $cfg.image | quote }}
+          imagePullPolicy: {{ $cfg.imagePullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- include "fm-dev-platform.containerSecurityContext" . | nindent 12 }}
+          {{- with $cfg.port }}
+          ports:
+            - name: http
+              containerPort: {{ . }}
+              protocol: TCP
+          {{- end }}
+          {{- with $cfg.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cfg.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cfg.probes }}
+            {{- with .liveness }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .readiness }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .startup }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with $cfg.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $cfg.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
