@@ -7,6 +7,14 @@ env:
   owner: ""             # e.g. andrew@fastmarkets.com
   expiresAt: ""         # RFC3339, e.g. 2026-04-30T22:00:00Z
 
+# Shared ingress config. Every env reuses the same hostname; deployments are
+# differentiated by path under <pathPrefix>/<env.name>/<deployment>.
+# An IngressRoute is emitted automatically for every deployment that sets a port.
+ingress:
+  host: dev-api-k8s.fastmarkets.com
+  pathPrefix: /devenv
+  tlsSecretName: ""     # reflected wildcard cert Secret name; hardcode later
+
 # One Deployment per map entry. Each is pinned to replicas: 1 by the chart.
 # Key becomes the Deployment name (namespace-scoped, no env-name prefix).
 deployments: {}

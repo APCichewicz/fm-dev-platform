@@ -1,0 +1,22 @@
+{{- range $name, $cfg := .Values.deployments }}
+{{- if $cfg.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" $name) | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fm-dev-platform.selectorLabels" (dict "root" $ "deploymentName" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+{{- end }}
+{{- end }}

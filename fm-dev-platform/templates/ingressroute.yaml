@@ -1,0 +1,28 @@
+{{- $envName := .Values.env.name -}}
+{{- $ingressHost := .Values.ingress.host -}}
+{{- $pathPrefix := .Values.ingress.pathPrefix -}}
+{{- $tlsSecret := .Values.ingress.tlsSecretName -}}
+{{- range $name, $cfg := .Values.deployments }}
+{{- if $cfg.port }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" $name) | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ $ingressHost }}`) && PathPrefix(`{{ $pathPrefix }}/{{ $envName }}/{{ $name }}`)
+      kind: Rule
+      services:
+        - name: {{ $name }}
+          port: 80
+  tls:
+    secretName: {{ $tlsSecret | quote }}
+{{- end }}
+{{- end }}
