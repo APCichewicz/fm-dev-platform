@@ -15,6 +15,16 @@ ingress:
   pathPrefix: /devenv
   tlsSecretName: ""     # reflected wildcard cert Secret name; hardcode later
 
+# Network policy. Baseline is deny-all; the chart adds the minimum allows the
+# bundle needs (DNS, ingress from Traefik). Add further allows here.
+networkPolicy:
+  traefikNamespace: traefik
+  allow:
+    # List of namespace names. Pods get bidirectional traffic with these.
+    namespaces: []
+    # List of CIDRs to allow egress to. Each entry: { cidr: "...", except: ["..."] }
+    ipBlocks: []
+
 # One Deployment per map entry. Each is pinned to replicas: 1 by the chart.
 # Key becomes the Deployment name (namespace-scoped, no env-name prefix).
 deployments: {}
@@ -28,11 +38,15 @@ deployments: {}
   #     limits:   { cpu: 500m, memory: 512Mi }
   #
   #   # Workload Identity. When true:
-  #   #   - serviceAccountName is set to the deployment name
+  #   #   - a ServiceAccount is created with name = deployment key
+  #   #   - serviceAccountName is set on the pod
   #   #   - automountServiceAccountToken: true (required for the projected token)
   #   #   - pod gets azure.workload.identity/use: "true" label
-  #   # When false (default), automount is forced off.
+  #   #   - workloadIdentity.clientId becomes required
+  #   # When false (default), no ServiceAccount is emitted and automount is forced off.
   #   usesServiceAccount: false
+  #   workloadIdentity:
+  #     clientId: "00000000-0000-0000-0000-000000000000"   # required when usesServiceAccount: true
   #
   #   # Probes are off by default. Specify any subset.
   #   probes:

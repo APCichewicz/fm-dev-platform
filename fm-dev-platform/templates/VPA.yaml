@@ -1,0 +1,24 @@
+{{- range $name, $cfg := .Values.deployments }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" $name) | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  updatePolicy:
+    updateMode: InPlaceOrRecreate
+  resourcePolicy:
+    containerPolicies:
+      - containerName: '*'
+        controlledResources:
+          - cpu
+          - memory
+{{- end }}

@@ -1,7 +1,7 @@
 # Developer Self-Service Environments Platform
 
 **Status:** Draft
-**Version:** 0.1
+**Version:** 0.2
 **Owner:** Platform Engineering
 **Last updated:** 2026-04-30
 
@@ -9,7 +9,7 @@
 
 ## 1. Summary
 
-A self-service platform that lets Fastmarkets developers provision short-lived, standards-compliant Kubernetes environments through an existing internal web UI. Each environment is a complete bundle — Deployment, Service, IngressRoute, autoscaler, resource policies — created from a single high-level request and automatically reaped after a TTL.
+A self-service platform that lets Fastmarkets developers provision short-lived, standards-compliant Kubernetes environments through an existing internal web UI. Each environment is a complete bundle — one or more Deployments (each pinned to 1 replica), Services, IngressRoutes, VPAs, resource policies — created from a single high-level request and automatically reaped after a TTL.
 
 The platform is implemented as a Kubebuilder operator that manages an `Environment` custom resource. Each `Environment` produces an ArgoCD `Application` that syncs a curated Helm chart. The operator owns lifecycle (creation, status aggregation, TTL expiry, deletion ordering); ArgoCD owns reconciliation and drift correction; the Helm chart owns the bundle definition.
 
@@ -79,18 +79,17 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
                                                               │
                                                               │ syncs
                                                               ▼
-                                                    ┌──────────────────┐
-                                                    │ Helm Chart       │
-                                                    │ "dev-environment"│
-                                                    │  - Namespace     │
-                                                    │  - Deployment    │
-                                                    │  - Service       │
-                                                    │  - IngressRoute  │
-                                                    │  - ScaledObject  │
-                                                    │  - VPA (Off)     │
-                                                    │  - ResourceQuota │
-                                                    │  - NetworkPolicy │
-                                                    └──────────────────┘
+                                                    ┌──────────────────────────┐
+                                                    │ Helm Chart               │
+                                                    │ "fm-dev-platform"        │
+                                                    │  - Namespace             │
+                                                    │  - Deployment(s)         │
+                                                    │  - Service(s)            │
+                                                    │  - IngressRoute(s)       │
+                                                    │  - VPA (InPlaceOrRecreate)│
+                                                    │  - ResourceQuota         │
+                                                    │  - NetworkPolicy         │
+                                                    └──────────────────────────┘
 ```
 
 **Component responsibilities.** The web UI handles authentication, form rendering, and status display. The backend API handles authorization (which user can create what), audit logging, and translation of form input to an `Environment` CR. The operator owns lifecycle: namespace creation, Application creation, status aggregation from Application health, TTL enforcement, deletion ordering. ArgoCD owns sync, drift correction, and self-heal. The Helm chart owns the manifest bundle and its defaults.
@@ -100,7 +99,7 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
 ### Environment lifecycle
 
 - **FR-1.** A user with the `environment.create` permission MUST be able to submit a form in the web UI and receive a running environment within 5 minutes (P95).
-- **FR-2.** Each environment MUST have a unique DNS hostname under a configured base domain, with a wildcard TLS certificate provisioned via cert-manager.
+- **FR-2.** All environments share a single configured ingress hostname (e.g. `dev-api-k8s.fastmarkets.com`). Each deployment with a port is reachable at a unique path under that host: `/<configured-prefix>/<env-name>/<deployment-name>`. TLS is terminated at Traefik using a single shared certificate stored as a Kubernetes Secret reflected into every environment namespace; the chart references it by name and does not provision certificates itself.
 - **FR-3.** Each environment MUST live in its own dedicated namespace named `env-<environment-name>`.
 - **FR-4.** Each environment MUST have a TTL between 1 hour and 7 days. Default is 8 hours.
 - **FR-5.** A user MUST be able to extend the TTL of their own environment up to the 7-day cap before expiry.
@@ -110,11 +109,18 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
 
 ### Bundle contents
 
-- **FR-9.** The chart MUST produce a Deployment with: enforced `securityContext` (`runAsNonRoot: true`, `readOnlyRootFilesystem: true`, dropped capabilities, seccomp `RuntimeDefault`), resource requests and limits, liveness and readiness probes, and standard labels (`app.kubernetes.io/*`, `platform.fastmarkets.io/owner`, `platform.fastmarkets.io/env-name`, `platform.fastmarkets.io/expires-at`).
-- **FR-10.** The chart MUST produce a ClusterIP Service selecting the Deployment.
-- **FR-11.** The chart MUST produce a Traefik IngressRoute attached to the Service, using HTTPS with the wildcard cert and the configured hostname.
-- **FR-12.** The chart MUST produce a KEDA ScaledObject targeting the Deployment with CPU and memory triggers, configurable min/max replicas (defaults: min 1, max 5).
-- **FR-13.** The chart MUST produce a VerticalPodAutoscaler in `Off` (recommender) mode targeting the Deployment. The operator MUST surface VPA recommendations on `Environment.status` so the UI can display rightsizing hints.
+- **FR-9.** The chart MUST produce one Deployment per entry in the `deployments` map of the `Environment` spec. Each Deployment:
+  - Is pinned to `replicas: 1`. Horizontal scaling is explicitly out of scope; these are POC environments, not load-bearing.
+  - Has an enforced pod and container `securityContext`: `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, dropped capabilities (`ALL`), seccomp `RuntimeDefault`. The chart enforces these — they are not user-overridable.
+  - Has user-templated resource requests and limits.
+  - Has optional liveness/readiness/startup probes (off by default; opt-in per deployment).
+  - Has `automountServiceAccountToken: false` by default; pod is opted into Workload Identity by setting `usesServiceAccount: true`, which sets `serviceAccountName`, flips automount to `true`, and adds the `azure.workload.identity/use: "true"` pod label.
+  - Carries standard labels (`app.kubernetes.io/*`, `platform.fastmarkets.io/env-name`, `platform.fastmarkets.io/deployment`).
+  - Carries standard annotations (`platform.fastmarkets.io/owner`, `platform.fastmarkets.io/expires-at`). These are annotations rather than labels because Kubernetes label values reject `@` (in emails) and `:` (in RFC3339 timestamps).
+- **FR-10.** The chart MUST produce one ClusterIP Service per Deployment that exposes a `port`. Deployments without a `port` (e.g. background workers) get no Service. The Service exposes `port: 80` mapped to the Deployment's named container port `http`, so consumers can always address `<service>:80` regardless of what the container listens on.
+- **FR-11.** The chart MUST produce one Traefik IngressRoute per Deployment that exposes a `port`. Each IngressRoute matches `Host(<configured-host>) && PathPrefix(<configured-prefix>/<env-name>/<deployment-name>)`, terminates TLS using the configured shared cert Secret, and forwards to the Deployment's Service on port 80. The chart applies no path-rewriting middleware — upstream apps receive the full prefixed path and must be configured (env var or app config) to know their base path.
+- **FR-12.** *(Retired.)* Horizontal autoscaling via KEDA was dropped from v1. Each Deployment is pinned to a single replica; if a future workload genuinely needs horizontal scaling, it does not belong on this platform.
+- **FR-13.** The chart MUST produce one VerticalPodAutoscaler per Deployment, in `InPlaceOrRecreate` update mode. VPA actively rightsizes pods (in place when possible, recreate when not). With `replicas: 1`, an in-place miss causes brief downtime during pod recreation; this is acceptable for POC environments.
 - **FR-14.** The chart MUST produce a ResourceQuota and LimitRange in the namespace to cap blast radius.
 - **FR-15.** The chart MUST produce a default-deny NetworkPolicy plus explicit allow rules for ingress from Traefik and egress to cluster DNS and the configured shared services (Mimir, Loki, etc.).
 
@@ -122,7 +128,7 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
 
 - **FR-16.** The `Environment` CRD MUST expose a strongly-typed `spec` validated by an OpenAPI v3 schema. Untyped passthrough values are not supported in v1.
 - **FR-17.** The web UI MUST render a form generated from (or aligned to) the CRD schema, including help text, defaults, and validation errors.
-- **FR-18.** The web UI MUST display per-environment status: phase, URL, owner, created-at, expires-at, current replica count, and VPA recommendations.
+- **FR-18.** The web UI MUST display per-environment status: phase, the URL of each ingressed deployment, owner, created-at, expires-at, and per-deployment ready state and currently-applied resources (as set by VPA).
 - **FR-19.** The web UI MUST display a "my environments" view and an "all environments" view (the latter gated by an admin permission).
 - **FR-20.** The backend MUST log every create, extend, and delete action with user identity, environment name, and timestamp.
 
@@ -157,35 +163,51 @@ spec:
   ttl: 8h                        # 1h ≤ ttl ≤ 168h
   chart:
     version: "1.4.2"             # semver, pinned per environment
-  workload:
-    image: registry.fastmarkets.io/myapp:abc123
-    port: 8080
-    env:
-      - name: LOG_LEVEL
-        value: debug
-    secrets:                     # references to pre-sealed SealedSecrets
-      - name: db-creds
-  hostname: feature-xyz          # combined with base domain at runtime
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
-  scaling:
-    minReplicas: 1
-    maxReplicas: 5
-    cpuTarget: 70
-    memoryTarget: 80
+  deployments:                   # map; key becomes the Deployment / Service / IngressRoute name
+    api:
+      image: registry.fastmarkets.io/myapp-api:abc123
+      port: 8080                 # optional; omit for portless workers (no Service / IngressRoute)
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+      usesServiceAccount: false  # opt into Workload Identity
+      env:                       # plain values + secret/configmap refs
+        - name: LOG_LEVEL
+          value: debug
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef: { name: db-creds, key: password }   # Secret in this namespace (e.g. SealedSecret)
+      envFrom: []
+      probes:                    # off by default
+        readiness:
+          httpGet: { path: /ready, port: 8080 }
+      volumes: []
+      volumeMounts: []
+    worker:
+      image: registry.fastmarkets.io/myapp-worker:abc123
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits:   { cpu: 250m, memory: 256Mi }
 status:
   phase: Ready                   # Pending | Provisioning | Ready | Degraded | Expiring | Deleting | Failed
-  url: https://feature-xyz.dev.fastmarkets.io
   applicationRef:
     namespace: argocd
     name: env-feature-xyz
   namespaceRef: env-feature-xyz
   createdAt: "2026-04-30T14:00:00Z"
   expiresAt: "2026-04-30T22:00:00Z"
-  vpaRecommendation:
-    cpu: 180m
-    memory: 312Mi
+  deployments:                   # mirrors spec.deployments; one entry per workload
+    api:
+      ready: true
+      url: https://dev-api-k8s.fastmarkets.com/devenv/feature-xyz/api
+      appliedResources:          # currently in-effect resources after VPA InPlaceOrRecreate
+        requests: { cpu: 180m, memory: 312Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+    worker:
+      ready: true
+      appliedResources:
+        requests: { cpu: 65m, memory: 140Mi }
+        limits:   { cpu: 250m, memory: 256Mi }
   conditions:
     - type: Ready
       status: "True"
@@ -207,9 +229,9 @@ status:
 
 ## 9. UI Requirements
 
-- **UI-1.** Form view: a single screen with grouped sections (Workload, Networking, Scaling, Lifecycle). Sensible defaults pre-populated. Inline validation matching CRD schema. Estimated cost displayed if available.
-- **UI-2.** List view: a table of environments with phase, owner, created-at, expires-at, URL, and actions (extend, delete, view in Argo).
-- **UI-3.** Detail view: full status, recent events (from `kubectl describe`-equivalent on the CR and Application), VPA recommendations with a "copy as values override" affordance, log link.
+- **UI-1.** Form view: a single screen with grouped sections (Lifecycle, Deployments, Networking). The Deployments section supports adding multiple deployment rows, each with its own image, port, resources, env vars, and Workload Identity toggle. Sensible defaults pre-populated. Inline validation matching CRD schema. Estimated cost displayed if available.
+- **UI-2.** List view: a table of environments with phase, owner, created-at, expires-at, deployment count, primary URL (or "n URLs"), and actions (extend, delete, view in Argo).
+- **UI-3.** Detail view: full status; per-deployment subview showing ready state, URL (if ingressed), currently-applied resources from VPA, and recent events; environment-level events (from `kubectl describe`-equivalent on the CR and Application); log link per deployment.
 - **UI-4.** Expiry banner: any environment within 1 hour of expiry displays a persistent banner with a one-click extend.
 - **UI-5.** Empty state: links to platform docs explaining what an environment is and what's included.
 
@@ -245,7 +267,7 @@ A dedicated `dev-environments` ArgoCD AppProject restricts:
 - Source: only the OCI registry for the curated chart.
 - Destination namespaces: only `env-*`.
 - Allowed cluster resources: `Namespace` only.
-- Allowed namespaced resources: the explicit set the chart produces (Deployment, Service, IngressRoute, ScaledObject, VPA, ResourceQuota, LimitRange, NetworkPolicy, ConfigMap, SealedSecret).
+- Allowed namespaced resources: the explicit set the chart produces (Deployment, Service, IngressRoute, VerticalPodAutoscaler, ResourceQuota, LimitRange, NetworkPolicy, ConfigMap, ServiceAccount, SealedSecret).
 
 This is the blast-radius limit if a chart version is compromised or a values payload tries to inject extra manifests.
 
@@ -256,7 +278,7 @@ This is the blast-radius limit if a chart version is compromised or a values pay
 - **SEC-3.** All secret material handled via existing Sealed Secrets workflow. The CRD references SealedSecret names; raw secret values are never accepted in the API.
 - **SEC-4.** Operator runs with least-privilege RBAC: read/write on `Environment` CRs and `Application` CRs, namespace create/delete, status patches. No cluster-admin.
 - **SEC-5.** Backend API authenticates via SSO and authorizes via existing role mappings. No service account tokens or kubeconfigs handled at the user layer.
-- **SEC-6.** All hostnames validated to live under the configured base domain. Hostname collisions across environments are rejected at admission.
+- **SEC-6.** Environments share a single configured ingress hostname; per-environment isolation comes from the path prefix, which is derived from `<env-name>` and is therefore guaranteed unique by the `Environment` CR's name uniqueness within the operator's namespace. Deployment names are validated against `^[a-z][a-z0-9-]{2,30}$` so they are safe to embed in URL paths.
 - **SEC-7.** Default-deny NetworkPolicy in every environment namespace; explicit allows for ingress from Traefik and egress to required shared services.
 
 ## 12. Observability
@@ -296,12 +318,17 @@ This is the blast-radius limit if a chart version is compromised or a values pay
 4. **Persistent storage.** v1 explicitly excludes PVCs to keep cleanup clean. Do we need a stateful escape hatch (e.g., shared dev databases referenced by env) and how do we model it?
 5. **Chart customization.** When developers need a chart capability that doesn't exist, what's the contribution path? Recommendation: the chart lives in a platform-owned repo with PR review; we add a `CONTRIBUTING.md` to make it clear.
 6. **Pre-existing UI integration.** What's the existing UI's tech stack and how does the form schema get generated from the CRD — handwritten, generated from OpenAPI, or driven by a JSON schema endpoint the backend exposes?
+7. **VPA cluster prerequisites.** `InPlaceOrRecreate` requires VPA ≥ 1.4 and the Kubernetes in-place pod resize feature gate enabled (K8s ≥ 1.33). Confirm the dev cluster meets both before rollout, and decide what the chart does on older clusters — fail at sync, or fall back to `Auto` (which always recreates)?
+8. **Shared TLS cert ownership.** A single Secret holds the cert for `dev-api-k8s.fastmarkets.com` and is reflected into every env namespace. Who owns the rotation/renewal pipeline (cert-manager + reflector? a manual upload?), and how do we alert if reflection is broken so envs don't silently lose TLS?
+9. **Path-rewriting policy.** v1 ships no StripPrefix middleware; apps must know their base path. Is this acceptable as a permanent constraint, or should we add an opt-in `stripPrefix: true` per deployment in v2?
 
 ## 14. Out of Scope (v1)
 
 - Multi-cluster targeting.
 - Stateful workloads (PVCs, StatefulSets).
-- Custom domain names per environment outside the configured base.
+- Custom hostnames per environment. All envs share one configured host; differentiation is by path.
+- Horizontal autoscaling (KEDA, HPA). Each Deployment is pinned to 1 replica.
+- Path-rewriting middleware. Apps must know their own base path.
 - CI/CD integration (build on PR open, deploy preview env automatically). Considered for v2.
 - Cost showback / chargeback. Visibility only in v1.
 - Cross-team environment sharing with granular RBAC. v1 is owner-only + admin-all.

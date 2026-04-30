@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: env-limits
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "env-limits") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      # Used when a container omits resources entirely. VPA will rightsize from here.
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 500m
+        memory: 512Mi
+      # No single container may exceed the env-wide quota on its own.
+      max:
+        cpu: "4"
+        memory: 12Gi

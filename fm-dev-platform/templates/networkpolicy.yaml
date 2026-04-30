@@ -1,0 +1,120 @@
+{{- $traefikNS := .Values.networkPolicy.traefikNamespace -}}
+{{- $allow := .Values.networkPolicy.allow -}}
+---
+# Baseline: deny everything not explicitly allowed below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "default-deny") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Cluster DNS is universally required — without this, no pod can resolve hostnames.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "allow-egress-dns") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Allow ingress from the Traefik namespace so IngressRoute traffic reaches pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-traefik
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "allow-ingress-traefik") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $traefikNS }}
+{{- with $allow.namespaces }}
+---
+# Operator-configured: allow ingress + egress to/from these namespaces.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-namespaces
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "allow-namespaces") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+  egress:
+    - to:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+{{- end }}
+{{- with $allow.ipBlocks }}
+---
+# Operator-configured: allow egress to these CIDR blocks (e.g. shared services, SaaS endpoints).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-ipblocks
+  labels:
+    {{- include "fm-dev-platform.commonLabels" (dict "root" $ "deploymentName" "allow-egress-ipblocks") | nindent 4 }}
+  annotations:
+    {{- include "fm-dev-platform.commonAnnotations" (dict "root" $) | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+            {{- with .except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+{{- end }}
