@@ -121,8 +121,8 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
 - **FR-11.** The chart MUST produce one Traefik IngressRoute per Deployment that exposes a `port`. Each IngressRoute matches `Host(<configured-host>) && PathPrefix(<configured-prefix>/<env-name>/<deployment-name>)`, terminates TLS using the configured shared cert Secret, and forwards to the Deployment's Service on port 80. The chart applies no path-rewriting middleware — upstream apps receive the full prefixed path and must be configured (env var or app config) to know their base path.
 - **FR-12.** *(Retired.)* Horizontal autoscaling via KEDA was dropped from v1. Each Deployment is pinned to a single replica; if a future workload genuinely needs horizontal scaling, it does not belong on this platform.
 - **FR-13.** The chart MUST produce one VerticalPodAutoscaler per Deployment, in `InPlaceOrRecreate` update mode. VPA actively rightsizes pods (in place when possible, recreate when not). With `replicas: 1`, an in-place miss causes brief downtime during pod recreation; this is acceptable for POC environments.
-- **FR-14.** The chart MUST produce a ResourceQuota and LimitRange in the namespace to cap blast radius.
-- **FR-15.** The chart MUST produce a default-deny NetworkPolicy plus explicit allow rules for ingress from Traefik and egress to cluster DNS and the configured shared services (Mimir, Loki, etc.).
+- **FR-14.** Each environment namespace MUST contain one ResourceQuota and one LimitRange. The ResourceQuota caps the namespace at 4 CPU and 12 GiB memory across both requests and limits. The LimitRange sets per-container defaults (requests: 100m / 128Mi; limits: 500m / 512Mi) so workloads that omit resources still run, and caps any single container at the namespace ceiling. VPA rightsizes within those bounds.
+- **FR-15.** Each environment namespace MUST have a default-deny NetworkPolicy plus two baseline allows: egress to cluster DNS (kube-dns in `kube-system`, UDP/TCP 53) and ingress from the configured Traefik namespace. Additional allows — bidirectional traffic with named namespaces, and egress to specific CIDRs — are configurable per-environment via the chart's `networkPolicy.allow.namespaces` and `networkPolicy.allow.ipBlocks` values, both empty by default.
 
 ### API & UI
 
@@ -171,6 +171,8 @@ spec:
         requests: { cpu: 100m, memory: 256Mi }
         limits:   { cpu: 500m, memory: 512Mi }
       usesServiceAccount: false  # opt into Workload Identity
+      workloadIdentity:
+        clientId: ""             # Azure AD app client UUID; REQUIRED when usesServiceAccount: true
       env:                       # plain values + secret/configmap refs
         - name: LOG_LEVEL
           value: debug

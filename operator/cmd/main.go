@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	platformv1alpha1 "github.com/apcichewicz/fm-dev-platform-operator/api/v1alpha1"
+	argocdv1alpha1 "github.com/apcichewicz/fm-dev-platform-operator/internal/argocd/v1alpha1"
 	"github.com/apcichewicz/fm-dev-platform-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -50,6 +51,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(platformv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(argocdv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
