@@ -128,7 +128,7 @@ A self-service tool with a constrained API and enforced expiry resolves all thre
 
 - **FR-16.** The `Environment` CRD MUST expose a strongly-typed `spec` validated by an OpenAPI v3 schema. Untyped passthrough values are not supported in v1.
 - **FR-17.** The web UI MUST render a form generated from (or aligned to) the CRD schema, including help text, defaults, and validation errors.
-- **FR-18.** The web UI MUST display per-environment status: phase, the URL of each ingressed deployment, owner, created-at, expires-at, and per-deployment ready state and currently-applied resources (as set by VPA).
+- **FR-18.** The web UI MUST display per-environment status: phase, the URL of each ingressed deployment, owner, created-at, expires-at, and per-deployment ready state. Resource sizing is delegated entirely to VPA and is not surfaced in the UI.
 - **FR-19.** The web UI MUST display a "my environments" view and an "all environments" view (the latter gated by an admin permission).
 - **FR-20.** The backend MUST log every create, extend, and delete action with user identity, environment name, and timestamp.
 
@@ -202,14 +202,8 @@ status:
     api:
       ready: true
       url: https://dev-api-k8s.fastmarkets.com/devenv/feature-xyz/api
-      appliedResources:          # currently in-effect resources after VPA InPlaceOrRecreate
-        requests: { cpu: 180m, memory: 312Mi }
-        limits:   { cpu: 500m, memory: 512Mi }
     worker:
       ready: true
-      appliedResources:
-        requests: { cpu: 65m, memory: 140Mi }
-        limits:   { cpu: 250m, memory: 256Mi }
   conditions:
     - type: Ready
       status: "True"
@@ -233,7 +227,7 @@ status:
 
 - **UI-1.** Form view: a single screen with grouped sections (Lifecycle, Deployments, Networking). The Deployments section supports adding multiple deployment rows, each with its own image, port, resources, env vars, and Workload Identity toggle. Sensible defaults pre-populated. Inline validation matching CRD schema. Estimated cost displayed if available.
 - **UI-2.** List view: a table of environments with phase, owner, created-at, expires-at, deployment count, primary URL (or "n URLs"), and actions (extend, delete, view in Argo).
-- **UI-3.** Detail view: full status; per-deployment subview showing ready state, URL (if ingressed), currently-applied resources from VPA, and recent events; environment-level events (from `kubectl describe`-equivalent on the CR and Application); log link per deployment.
+- **UI-3.** Detail view: full status; per-deployment subview showing ready state, URL (if ingressed), and recent events; environment-level events (from `kubectl describe`-equivalent on the CR and Application); log link per deployment.
 - **UI-4.** Expiry banner: any environment within 1 hour of expiry displays a persistent banner with a one-click extend.
 - **UI-5.** Empty state: links to platform docs explaining what an environment is and what's included.
 

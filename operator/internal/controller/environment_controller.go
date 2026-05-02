@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -54,6 +55,7 @@ type EnvironmentReconciler struct {
 // +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -118,8 +120,13 @@ func (r *EnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	err := r.Status().Update(ctx, &environment)
-	if err != nil {
+	// observeStatus is best-effort. A failure here just means we display stale
+	// status — better than failing the whole reconcile over an informational read.
+	if err := r.observeStatus(ctx, &environment); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to observe status; continuing")
+	}
+
+	if err := r.Status().Update(ctx, &environment); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to update status")
 		return ctrl.Result{}, err
 	}
@@ -272,6 +279,95 @@ func (r *EnvironmentReconciler) ensureApplication(ctx context.Context, environme
 		return nil
 	})
 	return err
+}
+
+// observeStatus populates Environment.Status from observed cluster state.
+// It is best-effort: any read failure leaves status partially populated and
+// returns the error for the caller to log. Callers should NOT fail the
+// reconcile on a status error — the next reconcile will retry.
+func (r *EnvironmentReconciler) observeStatus(ctx context.Context, environment *platformv1alpha1.Environment) error {
+	nsName := fmt.Sprintf("env-%s", environment.Name)
+	appName := fmt.Sprintf("env-%s", environment.Name)
+
+	// Static refs — derivable from env.Name without any API call.
+	environment.Status.NamespaceRef = nsName
+	environment.Status.ApplicationRef = &platformv1alpha1.ObjectRef{
+		Namespace: r.Config.ArgoCDNamespace,
+		Name:      appName,
+	}
+
+	// Operator's first-seen timestamp. Distinct from metadata.creationTimestamp
+	// (the apiserver's). Set once and never update.
+	if environment.Status.CreatedAt == nil {
+		now := metav1.Now()
+		environment.Status.CreatedAt = &now
+	}
+
+	// Map Argo Application health/sync to our Phase enum.
+	var app argocdv1alpha1.Application
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.Config.ArgoCDNamespace, Name: appName}, &app)
+	switch {
+	case errors.IsNotFound(err):
+		environment.Status.Phase = platformv1alpha1.PhasePending
+		return nil
+	case err != nil:
+		return fmt.Errorf("get argo application: %w", err)
+	}
+
+	var phase platformv1alpha1.EnvironmentPhase
+	switch {
+	case app.Status.Health.Status == "Healthy" && app.Status.Sync.Status == "Synced":
+		phase = platformv1alpha1.PhaseReady
+	case app.Status.Health.Status == "Degraded":
+		phase = platformv1alpha1.PhaseDegraded
+	default:
+		// Covers Progressing, Missing, Unknown, "", or Synced-but-unhealthy etc.
+		phase = platformv1alpha1.PhaseProvisioning
+	}
+
+	// Override: Expiring takes precedence over Ready when within 1h of expiry.
+	if phase == platformv1alpha1.PhaseReady && time.Until(environment.Spec.ExpiresAt.Time) < time.Hour {
+		phase = platformv1alpha1.PhaseExpiring
+	}
+
+	environment.Status.Phase = phase
+
+	// Per-deployment status: iterate spec keys (not all deployments in the
+	// namespace) so we only surface workloads the user requested.
+	deploymentStatuses := make(map[string]platformv1alpha1.DeploymentStatus, len(environment.Spec.Deployments))
+	for name, cfg := range environment.Spec.Deployments {
+		ds := platformv1alpha1.DeploymentStatus{}
+
+		var dep appsv1.Deployment
+		err := r.Get(ctx, client.ObjectKey{Namespace: nsName, Name: name}, &dep)
+		switch {
+		case errors.IsNotFound(err):
+			// Chart hasn't synced this workload yet, or it's mid-creation.
+			// Leave Ready=false.
+		case err != nil:
+			// Best-effort: log and move on so one missing deployment doesn't
+			// blank out the rest of the map.
+			logf.FromContext(ctx).Error(err, "Failed to get deployment for status", "deployment", name)
+		default:
+			ds.Ready = dep.Status.Replicas > 0 && dep.Status.AvailableReplicas == dep.Status.Replicas
+		}
+
+		// URL only when the deployment has an ingress (i.e., a port is set).
+		// Mirrors the chart's "skip ingress when no port" rule.
+		if cfg.Port != nil {
+			ds.URL = fmt.Sprintf("https://%s%s/%s/%s",
+				r.Config.IngressHost,
+				r.Config.IngressPathPrefix,
+				environment.Name,
+				name,
+			)
+		}
+
+		deploymentStatuses[name] = ds
+	}
+	environment.Status.Deployments = deploymentStatuses
+
+	return nil
 }
 
 // helmValues mirrors the chart's values.yaml shape. Marshalling this into JSON

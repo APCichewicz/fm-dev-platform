@@ -147,9 +147,6 @@ type DeploymentStatus struct {
 
 	// +optional
 	URL string `json:"url,omitempty"`
-
-	// +optional
-	AppliedResources *corev1.ResourceRequirements `json:"appliedResources,omitempty"`
 }
 
 // +kubebuilder:object:root=true

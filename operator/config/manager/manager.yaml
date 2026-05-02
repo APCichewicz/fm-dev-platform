@@ -66,6 +66,23 @@ spec:
         image: controller:latest
         name: manager
         ports: []
+        env:
+        - name: INGRESS_HOST
+          value: dev-api-k8s.fastmarkets.com
+        - name: INGRESS_PATH_PREFIX
+          value: /devenv
+        - name: TLS_SECRET_NAME
+          value: ""                              # TODO: name of the reflected wildcard cert Secret
+        - name: TRAEFIK_NAMESPACE
+          value: traefik
+        - name: CHART_REGISTRY
+          value: ""                              # TODO: OCI registry, e.g. oci://registry.fastmarkets.io/charts
+        - name: CHART_NAME
+          value: fm-dev-platform
+        - name: CHART_VERSION
+          value: "0.1.0"                         # bump when the chart changes
+        - name: ARGOCD_NAMESPACE
+          value: argocd
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
